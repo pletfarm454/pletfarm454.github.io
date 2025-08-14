@@ -31,7 +31,7 @@ local camera            = Workspace.CurrentCamera
 
 -- ================ Config ================
 local LEGACY_KEY      = "megvipmode"  -- accepted only if already saved locally
-local VIP_API_BASE    = "https://YOUR-WORKER-NAME.workers.dev" -- TODO: set your Worker URL
+local VIP_API_BASE    = "https://vip.pleyfarm11.workers.dev" -- TODO: set your Worker URL
 local RELOAD_URL      = "https://raw.githubusercontent.com/pletfarm454/scripts/refs/heads/main/script.lua"
 local DISCORD_CONTACT = "plet_farm"
 
