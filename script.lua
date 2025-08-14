@@ -122,8 +122,6 @@ Config.espColors = (type(Config.espColors) == "table") and Config.espColors or {
 Config.espColors.puzzle   = (type(Config.espColors.puzzle) == "string"   and #Config.espColors.puzzle   > 0) and Config.espColors.puzzle   or "#FFFF00"
 Config.espColors.npc      = (type(Config.espColors.npc) == "string"      and #Config.espColors.npc      > 0) and Config.espColors.npc      or "#FF0000"
 Config.espColors.elevator = (type(Config.espColors.elevator) == "string" and #Config.espColors.elevator > 0) and Config.espColors.elevator or "#00FF00"
--- Optionally persist new color defaults if first run
--- SaveConfig(Config)
 
 -- Online validation
 local function validateKeyOnline(key)
@@ -400,7 +398,6 @@ end
 MainTab:CreateButton({ Name="Unlock All", Callback=function()
     unlockAllSuits(); levelLoopRunning=true; task.spawn(updateLevelLoop)
 end })
--- W.I.P note
 MainTab:CreateParagraph({
     Title = "Auto Farming",
     Content = "W.I.P (work in progress) — coming soon!"
@@ -497,7 +494,6 @@ VIPTab:CreateInput({
 
 -- Panic
 local function Panic()
-    -- мягко выключаем всё
     espEnabled=false; pcall(clearESP)
     speedLoopEnabled=false; godmodeEnabled=false
     RunningTrapLoop=false; RunningPingLoop=false
@@ -538,7 +534,10 @@ task.spawn(function()
                     local ts = tonumber(msg.createdAt or 0) or 0
                     if msg.type == "broadcast" then
                         local txt=tostring(msg.text or "")
-                        if txt~="" then Rayfield:Notify({ Title=msg.vipOnly and "Broadcast (VIP)" or "Broadcast", Content=txt, Duration=8 }) end
+                        if txt~="" then
+                            local title = tostring(msg.title or (msg.vipOnly and "Broadcast (VIP)" or "Broadcast"))
+                            Rayfield:Notify({ Title=title, Content=txt, Duration=8 })
+                        end
                     elseif msg.type == "control" then
                         local action=tostring(msg.action or "")
                         if action=="disable_all" then
@@ -551,7 +550,11 @@ task.spawn(function()
                         elseif action=="maintenance_off" then
                             MaintenanceMode=false
                         elseif action=="notify" then
-                            local txt=tostring(msg.text or ""); if txt~="" then Rayfield:Notify({Title="Admin", Content=txt, Duration=8}) end
+                            local txt=tostring(msg.text or "")
+                            if txt~="" then
+                                local title = tostring(msg.title or "Admin")
+                                Rayfield:Notify({Title=title, Content=txt, Duration=8})
+                            end
                         elseif action=="esp_on" then espEnabled=true
                         elseif action=="esp_off" then espEnabled=false; pcall(clearESP)
                         elseif action=="ws" then local v=tonumber(msg.value or speedValue) or 16; speedValue=v; local h=getHumanoid(); if h then h.WalkSpeed=v end
