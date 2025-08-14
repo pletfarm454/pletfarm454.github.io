@@ -1,6 +1,6 @@
 -- =======================
 --  Game Hub + VIP (file + full validation)
---  VIP tabs + configurable binds + panic
+--  VIP tabs + configurable binds + panic + ESP color picker + WIP note
 --  by @plet_farmyt
 -- =======================
 
@@ -26,7 +26,7 @@ local LocalPlayer       = Players.LocalPlayer
 -- Config
 local VIP_API_BASE        = "https://vip.pleyfarm11.workers.dev"
 local VIP_FILE            = "vipkey.txt"
-local CFG_FILE            = "plet_hub_config.json"   -- бинды
+local CFG_FILE            = "plet_hub_config.json"   -- бинды + цвета ESP
 local LEGACY_KEY          = "megvipmode"
 local DISCORD_CONTACT     = "plet_farm"
 local OFFLINE_CHECK_EVERY = 30
@@ -101,6 +101,29 @@ Config.trapKey  = (type(Config.trapKey )=="string" and #Config.trapKey >0) and C
 Config.pingKey  = (type(Config.pingKey )=="string" and #Config.pingKey >0) and Config.pingKey  or "P"
 Config.coilKey  = (type(Config.coilKey )=="string" and #Config.coilKey >0) and Config.coilKey  or "C"
 Config.panicKey = (type(Config.panicKey)=="string" and #Config.panicKey>0) and Config.panicKey or "L"
+
+-- Color helpers for config
+local function Color3ToHex(c)
+    local function to255(x) return math.clamp(math.floor((x or 0)*255 + 0.5), 0, 255) end
+    return string.format("#%02X%02X%02X", to255(c.R), to255(c.G), to255(c.B))
+end
+local function HexToColor3(hex)
+    hex = tostring(hex or ""):gsub("#","")
+    if #hex ~= 6 then return nil end
+    local r = tonumber(hex:sub(1,2), 16)
+    local g = tonumber(hex:sub(3,4), 16)
+    local b = tonumber(hex:sub(5,6), 16)
+    if not r or not g or not b then return nil end
+    return Color3.fromRGB(r, g, b)
+end
+
+-- ESP color defaults in config
+Config.espColors = (type(Config.espColors) == "table") and Config.espColors or {}
+Config.espColors.puzzle   = (type(Config.espColors.puzzle) == "string"   and #Config.espColors.puzzle   > 0) and Config.espColors.puzzle   or "#FFFF00"
+Config.espColors.npc      = (type(Config.espColors.npc) == "string"      and #Config.espColors.npc      > 0) and Config.espColors.npc      or "#FF0000"
+Config.espColors.elevator = (type(Config.espColors.elevator) == "string" and #Config.espColors.elevator > 0) and Config.espColors.elevator or "#00FF00"
+-- Optionally persist new color defaults if first run
+-- SaveConfig(Config)
 
 -- Online validation
 local function validateKeyOnline(key)
@@ -248,12 +271,13 @@ local function giveVest()
     evs:WaitForChild("VestEvent"):FireServer({LocalPlayer})
 end
 
--- ESP (simple)
+-- ESP (with color pickers)
 local espEnabled=false
 local beamFolder, espObjects = nil, {}
-local puzzleColor=Color3.fromRGB(255,255,0)
-local npcColor=Color3.fromRGB(255,0,0)
-local elevatorColor=Color3.fromRGB(0,255,0)
+local puzzleColor   = HexToColor3(Config.espColors.puzzle)   or Color3.fromRGB(255,255,0)
+local npcColor      = HexToColor3(Config.espColors.npc)      or Color3.fromRGB(255,0,0)
+local elevatorColor = HexToColor3(Config.espColors.elevator) or Color3.fromRGB(0,255,0)
+
 local function clearESP()
     if beamFolder then beamFolder:Destroy() end
     beamFolder=nil; espObjects={}
@@ -288,6 +312,9 @@ task.spawn(function() while true do if espEnabled then drawESP() else clearESP()
 local speedLoopEnabled=false
 local speedValue=16
 local godmodeEnabled=false
+local RunningTrapLoop=false
+local RunningPingLoop=false
+
 task.spawn(function()
     while true do
         if speedLoopEnabled then local h=getHumanoid(); if h then h.WalkSpeed=speedValue end end
@@ -370,10 +397,14 @@ local function ensureVIPTabs()
 end
 
 -- Main
-MainTab:CreateButton({ Name="Unlock All (VIP)", Callback=function()
-    if not vipAccess then Rayfield:Notify({Title="VIP Only", Content="Unlock All is VIP-only.", Duration=4}) return end
+MainTab:CreateButton({ Name="Unlock All", Callback=function()
     unlockAllSuits(); levelLoopRunning=true; task.spawn(updateLevelLoop)
 end })
+-- W.I.P note
+MainTab:CreateParagraph({
+    Title = "Auto Farming",
+    Content = "W.I.P (work in progress) — coming soon!"
+})
 
 -- Items
 ItemsTab:CreateButton({ Name="Medkit (VIP)",     Callback=giveMedkit })
@@ -382,6 +413,54 @@ ItemsTab:CreateButton({ Name="Vest (VIP)",       Callback=giveVest })
 
 -- ESP
 ESPTab:CreateToggle({ Name="Enable ESP", CurrentValue=false, Callback=function(v) espEnabled=v end })
+ESPTab:CreateParagraph({
+    Title = "ESP Colors",
+    Content = "Customize and they'll be saved to config."
+})
+ESPTab:CreateColorPicker({
+    Name = "Puzzle Color",
+    Color = puzzleColor,
+    Callback = function(c)
+        puzzleColor = c
+        Config.espColors.puzzle = Color3ToHex(c)
+        SaveConfig(Config)
+        if espEnabled then drawESP() end
+    end
+})
+ESPTab:CreateColorPicker({
+    Name = "NPC Color",
+    Color = npcColor,
+    Callback = function(c)
+        npcColor = c
+        Config.espColors.npc = Color3ToHex(c)
+        SaveConfig(Config)
+        if espEnabled then drawESP() end
+    end
+})
+ESPTab:CreateColorPicker({
+    Name = "Elevator Color",
+    Color = elevatorColor,
+    Callback = function(c)
+        elevatorColor = c
+        Config.espColors.elevator = Color3ToHex(c)
+        SaveConfig(Config)
+        if espEnabled then drawESP() end
+    end
+})
+ESPTab:CreateButton({
+    Name = "Reset ESP Colors",
+    Callback = function()
+        puzzleColor   = Color3.fromRGB(255,255,0)
+        npcColor      = Color3.fromRGB(255,0,0)
+        elevatorColor = Color3.fromRGB(0,255,0)
+        Config.espColors.puzzle   = "#FFFF00"
+        Config.espColors.npc      = "#FF0000"
+        Config.espColors.elevator = "#00FF00"
+        SaveConfig(Config)
+        if espEnabled then drawESP() end
+        Rayfield:Notify({Title="ESP", Content="Colors reset to defaults.", Duration=3})
+    end
+})
 
 -- Player
 PlayerTab:CreateToggle({ Name="WalkSpeed Loop", CurrentValue=false, Callback=function(v) speedLoopEnabled=v end })
