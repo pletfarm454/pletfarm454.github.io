@@ -1,8 +1,8 @@
 -- =======================
 --  Game Hub + VIP System (EN)
---  VIP online check + legacy handling + VIP-only Items
---  Remove VIP tabs on expiry (reload) + clipboard on invalid key
---  Unlock All is VIP-only
+--  VIP online check (soft) + legacy handling + VIP-only Items
+--  Remove VIP tabs on explicit invalidation (reload)
+--  Copy Saved Key + Discord clipboard on invalid
 --  by @plet_farmyt
 -- =======================
 
@@ -30,10 +30,11 @@ local LocalPlayer       = Players.LocalPlayer
 local camera            = Workspace.CurrentCamera
 
 -- ================ Config ================
-local LEGACY_KEY      = "megvipmode"  -- accepted only if already saved locally
-local VIP_API_BASE    = "https://vip.pleyfarm11.workers.dev" -- TODO: set your Worker URL
-local RELOAD_URL      = "https://raw.githubusercontent.com/pletfarm454/scripts/refs/heads/main/script.lua"
-local DISCORD_CONTACT = "plet_farm"
+local LEGACY_KEY         = "megvipmode"  -- accepted only if already saved locally
+local VIP_API_BASE       = "https://vip.pleyfarm11.workers.dev" -- your Worker base
+local RELOAD_URL         = "https://raw.githubusercontent.com/pletfarm454/scripts/refs/heads/main/script.lua"
+local DISCORD_CONTACT    = "plet_farm"
+local VIP_CHECK_INTERVAL = 300 -- seconds (soft recheck; no VIP removal on network errors)
 
 -- ================ Base64 utils ================
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -387,7 +388,7 @@ local function RebuildWithoutVIP()
     pcall(function() loadstring(game:HttpGet(RELOAD_URL))() end)
 end
 
--- ================ VIP saved key online check on start ================
+-- ================ VIP saved key online check on start (soft) ================
 local function validateSavedKeyOnlineIfAny()
     local raw = LoadVIP()
     if raw == "" then return end
@@ -397,14 +398,20 @@ local function validateSavedKeyOnlineIfAny()
     end
     local v2 = parseV2Saved(raw)
     if not v2 or not v2.key then return end
-    local ok, info = validateKeyOnline(v2.key)
+
+    local ok, infoOrReason = validateKeyOnline(v2.key)
     if ok then
+        local info = infoOrReason
         local newExp = tonumber(info.expires or v2.expires or 0) or 0
         local newUid = tonumber(info.userId or v2.userId or 0) or 0
         SaveVIP(("v2|%s|%d|%d"):format(v2.key, newExp, newUid))
         isVIP, vipAccess = true, true
     else
-        isVIP, vipAccess = false, false
+        local reason = infoOrReason
+        -- Only explicit refusals drop VIP; network/JSON keep current offline status
+        if reason == "Expired" or reason == "NotFound" or reason == "Revoked" or reason == "WrongUser" then
+            isVIP, vipAccess = false, false
+        end
     end
 end
 
@@ -431,7 +438,7 @@ local function createKeybindsTab() end
 local function createExploitsTab() end
 
 -- Main
-MainTab:CreateButton({ Name = "Unlock All", Callback = function()
+MainTab:CreateButton({ Name = "Unlock All (VIP)", Callback = function()
     if not vipAccess then Rayfield:Notify({Title="VIP Only", Content="Unlock All is VIP-only.", Duration=4}); return end
     if MaintenanceMode then Rayfield:Notify({Title="Maintenance", Content="Disabled during maintenance.", Duration=4}); return end
     unlockAllSuits()
@@ -541,6 +548,70 @@ EmoteTab:CreateButton({
 -- Settings
 SettingsTab:CreateParagraph({ Title = "Info", Content = "Script made by @plet_farmyt" })
 
+-- VIP tab: Copy Saved Key + Input
+VIPTab:CreateButton({
+    Name = "Copy Saved Key",
+    Callback = function()
+        local raw = LoadVIP()
+        if raw == "" then
+            Rayfield:Notify({ Title="VIP", Content="No key saved.", Duration=4 })
+            return
+        end
+        if raw == LEGACY_KEY then
+            SafeSetClipboard(LEGACY_KEY)
+            Rayfield:Notify({ Title="VIP", Content="Legacy key copied (works only if already saved).", Duration=6 })
+            return
+        end
+        local v2 = parseV2Saved(raw)
+        if v2 and v2.key and v2.key ~= "" then
+            SafeSetClipboard(v2.key)
+            Rayfield:Notify({ Title="VIP", Content="Saved key copied to clipboard.", Duration=4 })
+        else
+            Rayfield:Notify({ Title="VIP", Content="Malformed saved key.", Duration=4 })
+        end
+    end
+})
+
+VIPTab:CreateInput({
+    Name = "Enter VIP Key",
+    PlaceholderText = "Enter VIP Key",
+    RemoveTextAfterFocusLost = false,
+    Callback = function(Value)
+        local key = (Value or ""):gsub("%s+", "")
+        if key == "" then return end
+
+        if key == LEGACY_KEY then
+            Rayfield:Notify({ Title = "VIP", Content = "This key is deprecated and no longer accepted.", Duration = 6 })
+            return
+        end
+
+        local ok, info = validateKeyOnline(key)
+        if ok then
+            local exp = tonumber(info.expires or 0) or 0
+            local uid = tonumber(info.userId or 0) or 0
+            SaveVIP(("v2|%s|%d|%d"):format(key, exp, uid))
+            isVIP, vipAccess = true, true
+            Rayfield:Notify({ Title = "VIP", Content = "VIP activated.", Duration = 4 })
+            createExploitsTab()
+            createKeybindsTab()
+        else
+            local reason = info
+            local msg = "Invalid key."
+            if reason == "Expired" then msg = "Key expired."
+            elseif reason == "WrongUser" then msg = "Key is bound to another user."
+            elseif reason == "Revoked" then msg = "Key revoked."
+            elseif reason == "Network" then msg = "Network error while validating the key."
+            end
+            SafeSetClipboard(DISCORD_CONTACT)
+            Rayfield:Notify({
+                Title = "VIP",
+                Content = msg .. " Discord name copied to clipboard. Contact: " .. DISCORD_CONTACT,
+                Duration = 8
+            })
+        end
+    end
+})
+
 -- Keybinds (VIP)
 local function createKeybindsTab()
     if KeybindsTab then return end
@@ -635,48 +706,7 @@ local function createExploitsTab()
     ExploitsTab:CreateButton({ Name = "Speed Coil Once", Callback = function() if MaintenanceMode then Rayfield:Notify({Title="Maintenance", Content="Disabled during maintenance.", Duration=4}); return end useSpeedCoil() end })
 end
 
--- VIP input
-VIPTab:CreateInput({
-    Name = "Enter VIP Key",
-    PlaceholderText = "Enter VIP Key",
-    RemoveTextAfterFocusLost = false,
-    Callback = function(Value)
-        local key = (Value or ""):gsub("%s+", "")
-        if key == "" then return end
-
-        if key == LEGACY_KEY then
-            Rayfield:Notify({ Title = "VIP", Content = "This key is deprecated and no longer accepted.", Duration = 6 })
-            return
-        end
-
-        local ok, info = validateKeyOnline(key)
-        if ok then
-            local exp = tonumber(info.expires or 0) or 0
-            local uid = tonumber(info.userId or 0) or 0
-            SaveVIP(("v2|%s|%d|%d"):format(key, exp, uid))
-            isVIP, vipAccess = true, true
-            Rayfield:Notify({ Title = "VIP", Content = "VIP activated.", Duration = 4 })
-            createExploitsTab()
-            createKeybindsTab()
-        else
-            local reason = info
-            local msg = "Invalid key."
-            if reason == "Expired" then msg = "Key expired."
-            elseif reason == "WrongUser" then msg = "Key is bound to another user."
-            elseif reason == "Revoked" then msg = "Key revoked."
-            elseif reason == "Network" then msg = "Network error while validating the key."
-            end
-            SafeSetClipboard(DISCORD_CONTACT)
-            Rayfield:Notify({
-                Title = "VIP",
-                Content = msg .. " Discord name copied to clipboard. Contact: " .. DISCORD_CONTACT,
-                Duration = 8
-            })
-        end
-    end
-})
-
--- If VIP already (from saved key) after online recheck
+-- If VIP already (from saved key) after soft online recheck
 task.spawn(function()
     local was = vipAccess
     validateSavedKeyOnlineIfAny()
@@ -687,7 +717,7 @@ task.spawn(function()
 end)
 
 -- ================ Guards / Pollers ================
--- VIP expiry + periodic online validation
+-- VIP expiry + periodic online validation (soft)
 task.spawn(function()
     local lastOnlineCheck = 0
     while true do
@@ -701,11 +731,11 @@ task.spawn(function()
             stillVIP = (v2.expires == 0 or now < v2.expires)
         end
 
-        -- periodic online check for v2 (every 120s)
-        if v2 and v2.key and (now - lastOnlineCheck) >= 120 then
+        if v2 and v2.key and (now - lastOnlineCheck) >= VIP_CHECK_INTERVAL then
             lastOnlineCheck = now
-            local ok, info = validateKeyOnline(v2.key)
+            local ok, infoOrReason = validateKeyOnline(v2.key)
             if ok then
+                local info = infoOrReason
                 local newExp = tonumber(info.expires or v2.expires or 0) or 0
                 local newUid = tonumber(info.userId or v2.userId or 0) or 0
                 if newExp ~= (v2.expires or 0) or newUid ~= (v2.userId or 0) then
@@ -713,7 +743,12 @@ task.spawn(function()
                 end
                 stillVIP = (newExp == 0 or now < newExp)
             else
-                stillVIP = false
+                local reason = infoOrReason
+                if reason == "Expired" or reason == "NotFound" or reason == "Revoked" or reason == "WrongUser" then
+                    stillVIP = false
+                else
+                    -- Network/JSON -> keep stillVIP as offline estimation
+                end
             end
         end
 
@@ -726,6 +761,20 @@ task.spawn(function()
             end
         end
         task.wait(15)
+    end
+end)
+
+-- Maintenance refresher (optional; if you use /state)
+task.spawn(function()
+    while true do
+        local ok, body = pcall(function() return game:HttpGet(VIP_API_BASE .. "/state") end)
+        if ok then
+            local ok2, data = pcall(function() return HttpService:JSONDecode(body) end)
+            if ok2 and data and data.ok ~= nil then
+                MaintenanceMode = data.maintenance and true or false
+            end
+        end
+        task.wait(30)
     end
 end)
 
