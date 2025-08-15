@@ -646,7 +646,22 @@ local function presencePingLoop()
                 HttpService:UrlEncode(tostring(LocalPlayer.Name or "")),
                 HttpService:UrlEncode(tostring(LocalPlayer.DisplayName or ""))
             )
-            pcall(function() game:HttpGet(url) end)
+            local ok, body = pcall(function() return game:HttpGet(url) end)
+            if ok then
+                local ok2, data = pcall(function() return HttpService:JSONDecode(body) end)
+                if ok2 and data and data.ok and data.total ~= nil then
+                    local vipCount = tonumber(data.vip or 0) or 0
+                    local total    = tonumber(data.total or 0) or 0
+                    local free     = tonumber(data.free or 0) or math.max(0, total - vipCount)
+                    local content = string.format("VIP: %d | Free: %d | Total: %d", vipCount, free, total)
+                    local para=_G.__plet_online_para
+                    if para and para.Set then
+                        pcall(function() para:Set({Title="Online", Content=content}) end)
+                    else
+                        _G.__plet_online_para = MainTab:CreateParagraph({ Title="Online", Content=content })
+                    end
+                end
+            end
             for i=1,PRESENCE_PING_EVERY do if not Alive() or myId~=RUN_ID then return end; task.wait(1) end
         end
     end)
