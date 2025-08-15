@@ -678,7 +678,7 @@ end
 
 -- Messages (Quick Actions)
 local seenMsg = {}
-local lastSince = 0
+local lastSince = now()  -- читаем только новые сообщения, а не архив
 local DEFAULT_RELOAD = "https://raw.githubusercontent.com/pletfarm454/scripts/main/script.lua"
 
 local function applyControl(msg)
@@ -688,7 +688,6 @@ local function applyControl(msg)
 
     if action == "disable_all" then
         Panic()
-        return
     elseif action == "reload" then
         local url = tostring(msg.scriptUrl or DEFAULT_RELOAD)
         task.spawn(function()
@@ -700,50 +699,40 @@ local function applyControl(msg)
                 Rayfield:Notify({Title="Reload", Content="Failed to reload script.", Duration=4})
             end
         end)
-        return
     elseif action == "notify" then
         local title = tostring(msg.title or "Notice")
         local text  = tostring(msg.text or "")
         Rayfield:Notify({Title=title, Content=text, Duration=5})
-        return
     elseif action == "ws" then
         local v = tonumber(msg.value) or 16
         speedValue = math.clamp(v, 8, 200)
         local h = getHumanoid()
         if h then pcall(function() h.WalkSpeed = speedValue end) end
         Rayfield:Notify({Title="WalkSpeed", Content=("Set to %d"):format(speedValue), Duration=3})
-        return
     elseif action == "speedloop_on" then
         speedLoopEnabled = true
         Rayfield:Notify({Title="Speed Loop", Content="ON", Duration=3})
-        return
     elseif action == "speedloop_off" then
         speedLoopEnabled = false
         Rayfield:Notify({Title="Speed Loop", Content="OFF", Duration=3})
-        return
     elseif action == "godmode_on" then
         if isVIP then godmodeEnabled = true; Rayfield:Notify({Title="Godmode", Content="ON", Duration=3})
         else Rayfield:Notify({Title="VIP Only", Content="Godmode is VIP-only.", Duration=3}) end
-        return
     elseif action == "godmode_off" then
         godmodeEnabled = false
         Rayfield:Notify({Title="Godmode", Content="OFF", Duration=3})
-        return
     elseif action == "esp_on" then
         espEnabled = true; drawESP()
         Rayfield:Notify({Title="ESP", Content="ON", Duration=3})
-        return
     elseif action == "esp_off" then
         espEnabled = false; clearESP()
         Rayfield:Notify({Title="ESP", Content="OFF", Duration=3})
-        return
     elseif action == "tool_once" then
         local tool = tostring(msg.tool or "")
         if tool=="trap" then useTrapTool()
         elseif tool=="ping" then usePing()
         elseif tool=="coil" then useSpeedCoilTool()
         end
-        return
     elseif action == "set_bind" then
         local bind = tostring(msg.bind or "")
         local key  = tostring(msg.keyname or msg.key or ""):upper()
@@ -755,7 +744,6 @@ local function applyControl(msg)
             SaveConfig(Config); refreshBinds()
             Rayfield:Notify({Title="Bind", Content=("Set %s -> %s"):format(bind, key), Duration=3})
         end
-        return
     elseif action == "set_panic" then
         local key = tostring(msg.keyname or msg.key or ""):upper()
         if key ~= "" then
@@ -763,41 +751,52 @@ local function applyControl(msg)
             SaveConfig(Config); refreshBinds()
             Rayfield:Notify({Title="Panic", Content=("Set Panic -> %s"):format(key), Duration=3})
         end
-        return
     elseif action == "vip_revalidate" then
         validateFileAndApplyVIP()
         Rayfield:Notify({Title="VIP", Content="Revalidated.", Duration=3})
-        return
     elseif action == "vip_delete_file" then
         if FileExists(VIP_FILE) then DeleteFile(VIP_FILE) end
         setVIP(false)
         Rayfield:Notify({Title="VIP", Content="VIP file deleted.", Duration=3})
-        return
-    else
-        -- неизвестное действие — просто игнор
-        return
     end
 end
 
 local function applyMessage(msg)
-    -- дедуп по id
     local id = tostring(msg.id or "")
     if id ~= "" then
         if seenMsg[id] then return end
         seenMsg[id] = true
     end
-
-    if tostring(msg.type or "") == "broadcast" then
+    local t = tostring(msg.type or "")
+    if t == "broadcast" then
         local title = tostring(msg.title or "Broadcast")
         local text  = tostring(msg.text or "")
         Rayfield:Notify({Title=title, Content=text, Duration=5})
-        return
-    elseif tostring(msg.type or "") == "control" then
+    elseif t == "control" then
         applyControl(msg)
-        return
     end
 end
 
+local function messagesPollLoop()
+    task.spawn(function()
+        local myId = RUN_ID
+        while Alive() and myId == RUN_ID do
+            local url = string.format("%s/messages?since=%d&vip=%d", VIP_API_BASE, lastSince, (isVIP and 1 or 0))
+            local ok, body = pcall(function() return game:HttpGet(url) end)
+            if ok then
+                local ok2, data = pcall(function() return HttpService:JSONDecode(body) end)
+                if ok2 and data and data.ok and type(data.messages)=="table" then
+                    for _, m in ipairs(data.messages) do
+                        local ts = tonumber(m.createdAt or 0) or 0
+                        if ts >= lastSince then lastSince = ts end
+                        applyMessage(m)
+                    end
+                end
+            end
+            for i=1,MSG_POLL_EVERY do if not Alive() or myId~=RUN_ID then return end; task.wait(1) end
+        end
+    end)
+end
 local function messagesPollLoop()
     task.spawn(function()
         local myId = RUN_ID
