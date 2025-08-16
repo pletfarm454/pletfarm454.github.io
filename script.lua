@@ -1,13 +1,3 @@
--- =======================
---  Game Hub (stable) + VIP + fireAllEvents
---  - VIP таб первый, Exploits/Keybinds видны всем (действия VIP-гейт)
---  - AutoFarm Loop в Main вызывает fireAllEvents() с задержкой
---  - Change Lvl (VIP) в Exploits вызывает fireAllEvents() разово
---  - Стабильные FS-хелперы, корректная работа без файла ключа
---  - ESP событийная, онлайн-счётчик через Worker (/presence, /online)
---  - Quick Actions через Worker (/messages)
--- =======================
-
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 -- Cleanup предыдущего запуска
@@ -41,7 +31,81 @@ local Workspace         = game:GetService("Workspace")
 local RunService        = game:GetService("RunService")
 local HttpService       = game:GetService("HttpService")
 local UserInputService  = game:GetService("UserInputService")
+local StarterGui        = game:GetService("StarterGui")
+local TextChatService   = game:GetService("TextChatService")
 local LocalPlayer       = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+-- ===== Emote 3 unlock + сообщение при старте =====
+local function sendLocalSystemMsg(text)
+    local ok = false
+    pcall(function()
+        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            local channels = TextChatService:FindFirstChild("TextChannels")
+            local channel = channels and channels:FindFirstChild("RBXGeneral")
+            if channel then
+                channel:DisplaySystemMessage(text)
+                ok = true
+            end
+        end
+    end)
+    if not ok then
+        pcall(function()
+            StarterGui:SetCore("ChatMakeSystemMessage", {
+                Text = text,
+                Color = Color3.fromRGB(85,255,85),
+                Font = Enum.Font.SourceSansBold,
+                TextSize = 18
+            })
+            ok = true
+        end)
+    end
+end
+
+local function unlockEmote3()
+    task.spawn(function()
+        sendLocalSystemMsg("emote 3 unlocked")
+        task.wait(0.5)
+        local gui = LocalPlayer:WaitForChild("PlayerGui", 10)
+        if not gui then return end
+        local deadline = tick() + 20
+        while tick() < deadline and Alive() do
+            local emoteUi = gui:FindFirstChild("Emoteui")
+            local buttonThree = emoteUi and emoteUi:FindFirstChild("ButtonThree")
+            if buttonThree then
+                local ls = buttonThree:FindFirstChild("LocalScript")
+                if ls and ls:IsA("LocalScript") then
+                    pcall(function() ls.Disabled = false end)
+                end
+                local lockGui = buttonThree:FindFirstChild("Lock")
+                if lockGui then
+                    local lockLS = lockGui:FindFirstChild("LocalScript")
+                    if lockLS and lockLS:IsA("LocalScript") then
+                        pcall(function() lockLS.Disabled = true end)
+                    end
+                    pcall(function()
+                        if lockGui:IsA("GuiObject") then
+                            lockGui.Visible = false
+                            pcall(function() lockGui.Active = false end)
+                            pcall(function() lockGui.Selectable = false end)
+                        end
+                    end)
+                    for _, d in ipairs(lockGui:GetDescendants()) do
+                        if d:IsA("GuiObject") then
+                            pcall(function() d.Visible = false end)
+                            pcall(function() d.Active = false end)
+                            if d:IsA("GuiButton") then
+                                pcall(function() d.AutoButtonColor = false end)
+                            end
+                        end
+                    end
+                end
+                break
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+unlockEmote3()
 
 -- UI parent
 local function getUiParent()
@@ -76,6 +140,7 @@ if not Rayfield then
     lbl.Size = UDim2.new(1,0,0,40)
     lbl.BackgroundTransparency = 0.3
     lbl.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    lbl.TextColor3 = Color3.fromRGB(255,255,255)
     lbl.Parent = getgenv().LoadedUI
     return
 end
@@ -85,7 +150,6 @@ local VIP_API_BASE        = "https://vip.pleyfarm11.workers.dev"
 local VIP_FILE            = "vipkey.txt"
 local CFG_FILE            = "plet_hub_config.json"
 local LEGACY_KEY          = "megvipmode"
-local DISCORD_CONTACT     = "plet_farm"
 local OFFLINE_CHECK_EVERY = 30
 local PRESENCE_PING_EVERY = 30
 local ONLINE_POLL_EVERY   = 15
@@ -97,7 +161,7 @@ local function now()
     return ok and ts or os.time()
 end
 
--- Base64 (tight)
+-- Base64
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 local function encB64(data)
     return ((data:gsub('.', function(x)
@@ -122,7 +186,7 @@ local function decB64(data)
     end))
 end
 
--- FS helpers (robust)
+-- FS helpers
 local function FileExists(path)
     if typeof(isfile) == "function" then
         local ok, v = pcall(isfile, path)
@@ -170,6 +234,8 @@ Config.trapKey  = (type(Config.trapKey )=="string" and #Config.trapKey >0) and C
 Config.pingKey  = (type(Config.pingKey )=="string" and #Config.pingKey >0) and Config.pingKey  or "P"
 Config.coilKey  = (type(Config.coilKey )=="string" and #Config.coilKey >0) and Config.coilKey  or "C"
 Config.panicKey = (type(Config.panicKey)=="string" and #Config.panicKey>0) and Config.panicKey or "L"
+Config.afRateHz = tonumber(Config.afRateHz) or 30
+Config.afBurst  = tonumber(Config.afBurst)  or 2
 
 -- Color helpers
 local function Color3ToHex(c)
@@ -218,7 +284,6 @@ local function parseV2(raw)
     if p=="v2" then return { key=k, expires=tonumber(e) or 0, userId=tonumber(u) or 0 } end
     return nil
 end
-local function SafeSetClipboard(t) pcall(function() setclipboard(t) end) end
 
 local function validateFileAndApplyVIP()
     if not FileExists(VIP_FILE) then setVIP(false); return false end
@@ -275,15 +340,32 @@ local function waitChild(parent, name, timeout)
     return nil
 end
 
--- ===== fireAllEvents (используется в AutoFarm/ChangeLvl) =====
+-- ===== fireAllEvents (ускоренная версия с кешем) =====
+local __evCache = {}
+local function __refreshEvCache()
+    local RS  = ReplicatedStorage
+    local evs = RS:FindFirstChild("Events")
+    __evCache.computerOff  = RS:FindFirstChild("computerOff")
+    __evCache.GradeStuff   = evs and evs:FindFirstChild("GradeStuff") or nil
+    __evCache.LevelPick    = evs and evs:FindFirstChild("LevelPickEvent") or nil
+    __evCache.LevelOpt1    = evs and evs:FindFirstChild("LevelOpt1Picked") or nil
+    __evCache.OpenElevator = RS:FindFirstChild("OpenElevator")
+    __evCache.computerOn   = RS:FindFirstChild("computerOn")
+end
+__refreshEvCache()
+
 local function fireAllEvents()
-    local ev = waitChild(ReplicatedStorage, "Events", 5)
-    pcall(function() local r=waitChild(ReplicatedStorage,"computerOff",3); if r then r:FireServer() end end)
-    pcall(function() local r=ev and waitChild(ev,"GradeStuff",3);        if r then r:FireServer() end end)
-    pcall(function() local r=ev and waitChild(ev,"LevelPickEvent",3);     if r then r:FireServer() end end)
-    pcall(function() local r=ev and waitChild(ev,"LevelOpt1Picked",3);    if r then r:FireServer() end end)
-    pcall(function() local r=waitChild(ReplicatedStorage,"OpenElevator",3); if r then r:FireServer() end end)
-    pcall(function() local r=waitChild(ReplicatedStorage,"computerOn",3); if r then r:FireServer() end end)
+    local C = __evCache
+    if not (C.computerOff and C.GradeStuff and C.LevelPick and C.LevelOpt1 and C.OpenElevator and C.computerOn) then
+        __refreshEvCache()
+        C = __evCache
+    end
+    pcall(function() if C.computerOff  then C.computerOff:FireServer()  end end)
+    pcall(function() if C.GradeStuff   then C.GradeStuff:FireServer()   end end)
+    pcall(function() if C.LevelPick    then C.LevelPick:FireServer()    end end)
+    pcall(function() if C.LevelOpt1    then C.LevelOpt1:FireServer()    end end)
+    pcall(function() if C.OpenElevator then C.OpenElevator:FireServer() end end)
+    pcall(function() if C.computerOn   then C.computerOn:FireServer()   end end)
 end
 
 -- Items/Tools (VIP-only)
@@ -342,11 +424,11 @@ local function giveVest()
     evs:WaitForChild("VestEvent"):FireServer({LocalPlayer})
 end
 
--- ESP (event-driven)
+-- ESP
 local espEnabled=false
 local beamFolder=nil
-local espObjects = {} -- [BasePart] = BoxHandleAdornment
-local watchers = {}   -- connections
+local espObjects = {}
+local watchers = {}
 
 local puzzleColor   = HexToColor3(Config.espColors.puzzle)   or Color3.fromRGB(255,255,0)
 local npcColor      = HexToColor3(Config.espColors.npc)      or Color3.fromRGB(255,0,0)
@@ -452,7 +534,7 @@ task.spawn(function()
     end
 end)
 
--- Window (VIP first)
+-- Window
 local Window = Rayfield:CreateWindow({
     Name="Game Hub",
     LoadingTitle="Loading...",
@@ -480,17 +562,19 @@ MainTab:CreateButton({
     end
 })
 _G.__plet_online_para = MainTab:CreateParagraph({ Title="Online", Content="VIP: 0 | Free: 0 | Total: 0" })
+
+-- AuroFarm
 MainTab:CreateToggle({
-    Name="AutoFarm Loop (Events)",
+    Name="AutoFarm",
     CurrentValue=false,
     Callback=function(v)
         AutoFarmEnabled = v
         if v then
             task.spawn(function()
-                local myId=RUN_ID
-                while AutoFarmEnabled and Alive() and myId==RUN_ID do
-                    fireAllEvents()
-                    task.wait(0.5)
+                local myId = RUN_ID
+                while AutoFarmEnabled and Alive() and myId == RUN_ID do
+                        fireAllEvents()
+                        task.wait()
                 end
             end)
         end
@@ -571,7 +655,7 @@ ExploitsTab:CreateButton({
     end
 })
 
--- VIP tab: ввод ключа + удаление файла
+-- VIP tab
 VIPTab:CreateInput({
     Name="Enter VIP Key",
     PlaceholderText="Enter VIP Key",
@@ -691,9 +775,9 @@ local function onlinePollLoop()
     end)
 end
 
--- Messages (Quick Actions)
+-- Messages
 local seenMsg = {}
-local lastSince = now()  -- читаем только новые сообщения, а не архив
+local lastSince = now()
 local DEFAULT_RELOAD = "https://raw.githubusercontent.com/pletfarm454/scripts/main/script.lua"
 
 local function applyControl(msg)
@@ -792,26 +876,6 @@ local function applyMessage(msg)
     end
 end
 
-local function messagesPollLoop()
-    task.spawn(function()
-        local myId = RUN_ID
-        while Alive() and myId == RUN_ID do
-            local url = string.format("%s/messages?since=%d&vip=%d", VIP_API_BASE, lastSince, (isVIP and 1 or 0))
-            local ok, body = pcall(function() return game:HttpGet(url) end)
-            if ok then
-                local ok2, data = pcall(function() return HttpService:JSONDecode(body) end)
-                if ok2 and data and data.ok and type(data.messages)=="table" then
-                    for _, m in ipairs(data.messages) do
-                        local ts = tonumber(m.createdAt or 0) or 0
-                        if ts >= lastSince then lastSince = ts end
-                        applyMessage(m)
-                    end
-                end
-            end
-            for i=1,MSG_POLL_EVERY do if not Alive() or myId~=RUN_ID then return end; task.wait(1) end
-        end
-    end)
-end
 local function messagesPollLoop()
     task.spawn(function()
         local myId = RUN_ID
